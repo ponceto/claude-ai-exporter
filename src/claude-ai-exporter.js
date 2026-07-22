@@ -20,8 +20,14 @@
     const API = '/api';
     const BUNDLE_AS_ZIP = true;
     const CREDENTIALS = 'include';
+    const LOG_PREFIX = 'claude-ai-exporter:';
     const MIME_JSON = 'application/json';
     const MIME_ZIP = 'application/zip';
+    const HTTP_UNAUTHORIZED = 401;
+    const HTTP_FORBIDDEN = 403;
+    const REVOKE_DELAY = 1000;
+    const ZIP_MAX_ENTRIES = 0xffff;
+    const ZIP_MAX_SIZE = 0xffffffff;
     const PLACEHOLDER = 'This block is not supported on your current device yet.';
     const OUTPUTS_PREFIX = '/mnt/user-data/outputs/';
     const DEFAULT_CONVERSATION_NAME = 'conversation';
@@ -35,17 +41,32 @@
     const LABEL_ASSISTANT = 'Assistant';
     const LABEL_UNKNOWN = 'Unknown';
 
-    const getJSON = async (url) => {
-        const response = await fetch(url, {
-            credentials: CREDENTIALS,
-            headers: { Accept: MIME_JSON },
-        });
+    const logPrint = (...args) => console.log(LOG_PREFIX, ...args);
+    const logAlert = (...args) => console.warn(LOG_PREFIX, ...args);
+    const logError = (...args) => console.error(LOG_PREFIX, ...args);
+
+    const checkResponse = (response, url) => {
         if(!response.ok) {
             const error = new Error(`HTTP ${response.status} on ${url}`);
             error.status = response.status;
             throw error;
         }
-        return response.json();
+        return response;
+    };
+
+    const getJSON = async (url) => {
+        const response = await fetch(url, {
+            credentials: CREDENTIALS,
+            headers: { Accept: MIME_JSON },
+        });
+        return checkResponse(response, url).json();
+    };
+
+    const getBytes = async (url) => {
+        const response = await fetch(url, {
+            credentials: CREDENTIALS,
+        });
+        return new Uint8Array(await checkResponse(response, url).arrayBuffer());
     };
 
     const sleep = (milliseconds) =>
@@ -59,7 +80,7 @@
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY);
     };
 
     const zipCrcTable = (() => {
@@ -154,7 +175,7 @@
 
     const match = window.location.pathname.match(/\/chat\/([0-9a-f-]{36})/i);
     if(!match) {
-        console.error('[export] No conversation detected in the URL. Open a conversation (https://claude.ai/chat/...) then retry.');
+        logError('No conversation detected in the URL. Open a conversation (https://claude.ai/chat/...) then retry.');
         return;
     }
     const conversationUuid = match[1];
@@ -164,11 +185,11 @@
         organizations = await getJSON(`${API}/organizations`);
     }
     catch(error) {
-        console.error('[export] Could not fetch organizations. Are you logged in to claude.ai?', error);
+        logError('Could not fetch organizations. Are you logged in to claude.ai?', error);
         return;
     }
     if(!Array.isArray(organizations) || organizations.length === 0) {
-        console.error('[export] No organization found on this account.');
+        logError('No organization found on this account.');
         return;
     }
 
@@ -192,7 +213,13 @@
         }
     }
     if(!data) {
-        console.error('[export] Conversation not found in any of your organizations.', lastError);
+        const status = lastError && lastError.status;
+        if(status === HTTP_UNAUTHORIZED || status === HTTP_FORBIDDEN) {
+            logError('Access to the conversation was denied. Your claude.ai session may have expired, log in again then retry.', lastError);
+        }
+        else {
+            logError('Conversation not found in any of your organizations.', lastError);
+        }
         return;
     }
 
@@ -300,7 +327,7 @@
         });
     }
     else {
-        console.warn('[export] No conversation text to export.');
+        logAlert('No conversation text to export.');
     }
 
     const wiggle = `${API}/organizations/${matchedOrganizationUuid}/conversations/${conversationUuid}/wiggle`;
@@ -314,36 +341,36 @@
         );
         for(const filePath of generated) {
             try {
-                const response = await fetch(
-                    `${wiggle}/download-file?path=${encodeURIComponent(filePath)}`,
-                    { credentials: CREDENTIALS },
-                );
-                if(!response.ok) {
-                    console.warn(`[export] Failed to download ${filePath} (HTTP ${response.status}).`);
-                    continue;
-                }
                 entries.push({
                     name: uniqueName(filePath.split('/').pop() || DEFAULT_FILE_NAME),
-                    bytes: new Uint8Array(await response.arrayBuffer()),
+                    bytes: await getBytes(`${wiggle}/download-file?path=${encodeURIComponent(filePath)}`),
                 });
             }
             catch(error) {
-                console.warn(`[export] Error while downloading ${filePath}.`, error);
+                logAlert(`Error while downloading ${filePath}.`, error);
             }
         }
     }
     catch(error) {
-        console.warn('[export] Generated files list unavailable (wiggle).', error);
+        logAlert('Generated files list unavailable (wiggle).', error);
     }
 
     if(entries.length === 0) {
-        console.error('[export] Nothing to export.');
+        logError('Nothing to export.');
         return;
+    }
+
+    const fitsInZip =
+        entries.length <= ZIP_MAX_ENTRIES &&
+        entries.every((entry) => entry.bytes.length <= ZIP_MAX_SIZE) &&
+        entries.reduce((sum, entry) => sum + entry.bytes.length, 0) <= ZIP_MAX_SIZE;
+    if(BUNDLE_AS_ZIP && !fitsInZip) {
+        logAlert('Content exceeds ZIP32 limits, downloading files individually.');
     }
 
     const fileList = entries.map((entry) => entry.name).join(', ');
     let destination;
-    if(BUNDLE_AS_ZIP) {
+    if(BUNDLE_AS_ZIP && fitsInZip) {
         triggerDownload(`${conversationName}.zip`, buildZip(entries));
         destination = `"${conversationName}.zip"`;
     }
@@ -354,5 +381,5 @@
         }
         destination = 'individual files';
     }
-    console.log(`[export] ${exported} message(s), ${entries.length} file(s) -> ${destination} : ${fileList}`);
+    logPrint(`${exported} message(s), ${entries.length} file(s) -> ${destination} : ${fileList}`);
 })();

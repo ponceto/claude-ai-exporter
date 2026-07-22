@@ -28,7 +28,7 @@ There is nothing to install. The script is a single async function with no depen
 A summary line is printed to the console, for example:
 
 ```
-[export] 12 message(s), 3 file(s) -> "my-conversation.zip" : my-conversation.md, report.md, chart.svg
+claude-ai-exporter: 12 message(s), 3 file(s) -> "my-conversation.zip" : my-conversation.md, report.md, chart.svg
 ```
 
 ## HOW IT WORKS
@@ -48,7 +48,7 @@ GET /api/organizations/{org}/conversations/{conversation}/wiggle/download-file?p
 
 `list-files` returns the workspace paths. The files Claude generated are the ones under `/mnt/user-data/outputs/`; each is fetched via `download-file`. All calls run same-origin with your session cookies, which is why you must be logged in.
 
-When `BUNDLE_AS_ZIP` is enabled, the files are packaged into a `.zip` by a small built-in ZIP writer (store method, no compression). It is implemented inline so the script stays dependency-free; no external library is loaded.
+When `BUNDLE_AS_ZIP` is enabled, the files are packaged into a `.zip` by a small built-in ZIP writer (store method, no compression). It is implemented inline so the script stays dependency-free; no external library is loaded. If the content exceeds the ZIP32 limits (65535 entries, 4 GiB per file or in total), the script falls back to downloading each file individually instead of producing a corrupt archive.
 
 ## LIMITATIONS
 
