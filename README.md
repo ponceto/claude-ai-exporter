@@ -31,6 +31,25 @@ A summary line is printed to the console, for example:
 claude-ai-exporter: 12 message(s), 3 file(s) -> "my-conversation.zip" : my-conversation.md, report.md, chart.svg
 ```
 
+## BROWSER EXTENSION
+
+The export can also be triggered from a toolbar button instead of pasting into the console. The extension runs the exact same script (`src/claude-ai-exporter.js`, copied unmodified at build time), so the behavior and the output are identical. It only requests the `activeTab` and `scripting` permissions: it can only act on the tab you click it on, and does nothing outside `claude.ai`.
+
+Build the packages (requires `make` and `zip`):
+
+```
+make
+```
+
+This assembles `dist/chrome/` and `dist/firefox/` and produces `dist/claude-ai-exporter-chrome.zip` and `dist/claude-ai-exporter-firefox.zip`. Each browser can also be built separately (`make build-chrome`, `make build-firefox`), and `make clean` removes `dist/`.
+
+To load it:
+
+  - **Chrome**: open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and select `dist/chrome/`.
+  - **Firefox**: open `about:debugging#/runtime/this-firefox`, click *Load Temporary Add-on* and select `dist/firefox/manifest.json`. (Temporary add-ons are removed when Firefox closes; a permanent install requires signing the zip through addons.mozilla.org.)
+
+Then open the conversation you want to export and click the extension icon: the download starts immediately and the summary line is printed to the page console.
+
 ## HOW IT WORKS
 
 The script reads the conversation UUID from the page URL, finds the organization that owns the conversation by trying each one returned by `/api/organizations` until the conversation responds (a failure on one organization never aborts the search), then fetches the conversation through Claude.ai's internal API:
