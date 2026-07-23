@@ -41,12 +41,12 @@ Build the packages (requires `make` and `zip`):
 make
 ```
 
-This assembles `dist/chrome/` and `dist/firefox/` and produces `dist/claude-ai-exporter-chrome.zip` and `dist/claude-ai-exporter-firefox.zip`. Each browser can also be built separately (`make build-chrome`, `make build-firefox`), and `make clean` removes `dist/`.
+This assembles `tmp/chrome/` and `tmp/firefox/` and produces `tmp/claude-ai-exporter-chrome.zip` and `tmp/claude-ai-exporter-firefox.zip`. Each browser can also be built separately (`make build-chrome`, `make build-firefox`), and `make clean` removes `tmp/`.
 
 To load it:
 
-  - **Chrome**: open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and select `dist/chrome/`.
-  - **Firefox**: open `about:debugging#/runtime/this-firefox`, click *Load Temporary Add-on* and select `dist/firefox/manifest.json`. (Temporary add-ons are removed when Firefox closes; a permanent install requires signing the zip through addons.mozilla.org.)
+  - **Chrome**: open `chrome://extensions`, enable *Developer mode*, click *Load unpacked* and select `tmp/chrome/`.
+  - **Firefox**: open `about:debugging#/runtime/this-firefox`, click *Load Temporary Add-on* and select `tmp/firefox/manifest.json`. (Requires Firefox 142 or later. Temporary add-ons are removed when Firefox closes; a permanent install requires signing the zip through addons.mozilla.org.)
 
 Then open the conversation you want to export and click the extension icon: the download starts immediately and the summary line is printed to the page console.
 

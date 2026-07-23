@@ -48,7 +48,7 @@ build-extensions:
   artifacts:
     name: "claude-ai-exporter"
     paths:
-      - ./dist/claude-ai-exporter*.zip
+      - ./tmp/claude-ai-exporter*.zip
 
 # ----------------------------------------------------------------------------
 # End-Of-File

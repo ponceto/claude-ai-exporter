@@ -37,9 +37,9 @@ BROWSER="${1}"
 PACKAGE='claude-ai-exporter'
 TOPDIR="$(pwd)"
 SRCDIR="${TOPDIR}/src"
-DISTDIR="${TOPDIR}/dist"
-TARGETDIR="${DISTDIR}/${BROWSER}"
-ZIPFILE="${DISTDIR}/${PACKAGE}-${BROWSER}.zip"
+TMPDIR="${TOPDIR}/tmp"
+DSTDIR="${TMPDIR}/${BROWSER}"
+ZIPFILE="${TMPDIR}/${PACKAGE}-${BROWSER}.zip"
 
 # ----------------------------------------------------------------------------
 # debug
@@ -51,28 +51,28 @@ set -x
 # cleanup
 # ----------------------------------------------------------------------------
 
-rm -rf "${TARGETDIR}" "${ZIPFILE}"                                   || exit 1
+rm -rf "${DSTDIR}" "${ZIPFILE}"                                      || exit 1
 
 # ----------------------------------------------------------------------------
 # create target directory
 # ----------------------------------------------------------------------------
 
-mkdir -p "${TARGETDIR}"                                              || exit 1
+mkdir -p "${DSTDIR}"                                                 || exit 1
 
 # ----------------------------------------------------------------------------
 # build extension
 # ----------------------------------------------------------------------------
 
-cp "${SRCDIR}/extension/manifest.${BROWSER}.json" "${TARGETDIR}/manifest.json" || exit 1
-cp "${SRCDIR}/extension/background.js"            "${TARGETDIR}/background.js" || exit 1
-cp "${SRCDIR}/${PACKAGE}.js"                      "${TARGETDIR}/${PACKAGE}.js" || exit 1
-cp -r "${SRCDIR}/extension/icons"                 "${TARGETDIR}/icons"         || exit 1
+cp "${SRCDIR}/extension/manifest.${BROWSER}.json" "${DSTDIR}/manifest.json" || exit 1
+cp "${SRCDIR}/extension/background.js"            "${DSTDIR}/background.js" || exit 1
+cp "${SRCDIR}/${PACKAGE}.js"                      "${DSTDIR}/${PACKAGE}.js" || exit 1
+cp -r "${SRCDIR}/extension/icons"                 "${DSTDIR}/icons"         || exit 1
 
 # ----------------------------------------------------------------------------
 # move to the target directory
 # ----------------------------------------------------------------------------
 
-cd "${TARGETDIR}"                                                    || exit 1
+cd "${DSTDIR}"                                                       || exit 1
 
 # ----------------------------------------------------------------------------
 # build zip file
