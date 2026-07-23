@@ -1,6 +1,6 @@
 # CLAUDE AI EXPORTER
 
-A standalone JavaScript snippet that exports a Claude.ai conversation to a markdown file and downloads every file Claude generated during it. You run it by pasting it into the browser console, no install and no dependencies.
+A tool that exports a Claude.ai conversation to a markdown file and downloads every file Claude generated during it. It comes in two forms sharing the exact same code: a standalone JavaScript snippet you paste into the browser console (no install, no dependencies), and a Chrome/Firefox extension that triggers the export from a toolbar button.
 
 ## WHAT IT DOES
 
@@ -16,9 +16,9 @@ The exported `.md` starts with the conversation title, then lists every message 
   - A browser logged in to claude.ai (the script reuses your session cookies).
   - An open Claude.ai conversation page (`https://claude.ai/chat/...`).
 
-There is nothing to install. The script is a single async function with no dependencies and no build step.
+The script is a single async function with no dependencies and no build step; used as a console snippet, there is nothing to install. The browser extension is optional and is built from the same script (see below).
 
-## USAGE
+## USAGE AS A CONSOLE SNIPPET
 
   1. Open the conversation you want to export at `https://claude.ai/chat/...`.
   2. Open the browser developer console (F12, *Console* tab).
@@ -31,9 +31,9 @@ A summary line is printed to the console, for example:
 claude-ai-exporter: 12 message(s), 3 file(s) -> "my-conversation.zip" : my-conversation.md, report.md, chart.svg
 ```
 
-## BROWSER EXTENSION
+## USAGE AS A BROWSER EXTENSION
 
-The export can also be triggered from a toolbar button instead of pasting into the console. The extension runs the exact same script (`src/claude-ai-exporter.js`, copied unmodified at build time), so the behavior and the output are identical. It only requests the `activeTab` and `scripting` permissions: it can only act on the tab you click it on, and does nothing outside `claude.ai`.
+The extension runs the exact same script (`src/claude-ai-exporter.js`, copied unmodified at build time), so the behavior and the output are identical to the console snippet. It only requests the `activeTab` and `scripting` permissions: it can only act on the tab you click it on, and does nothing outside `claude.ai`.
 
 Build the packages (requires `make` and `zip`):
 
