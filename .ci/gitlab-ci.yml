@@ -1,0 +1,55 @@
+#
+# gitlab-ci.yml - Copyright (c) 2026 - Olivier Poncet
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# ----------------------------------------------------------------------------
+# default
+# ----------------------------------------------------------------------------
+
+default:
+  image: debian:stable
+
+# ----------------------------------------------------------------------------
+# stages
+# ----------------------------------------------------------------------------
+
+stages:
+  - build
+
+# ----------------------------------------------------------------------------
+# build extensions
+# ----------------------------------------------------------------------------
+
+build-extensions:
+  stage: build
+  tags:
+    - linux
+    - amd64
+    - docker
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+  before_script:
+    - ./.ci/ci-setup-debian.sh
+  script:
+    - make clean all
+  artifacts:
+    name: "claude-ai-exporter"
+    paths:
+      - ./dist/claude-ai-exporter*.zip
+
+# ----------------------------------------------------------------------------
+# End-Of-File
+# ----------------------------------------------------------------------------
