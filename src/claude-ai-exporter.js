@@ -30,8 +30,12 @@
     const ZIP_MAX_SIZE = 0xffffffff;
     const PLACEHOLDER = 'This block is not supported on your current device yet.';
     const OUTPUTS_PREFIX = '/mnt/user-data/outputs/';
+    const UPLOADS_PREFIX = '/mnt/user-data/uploads/';
+    const OUTPUTS_FOLDER = 'outputs/';
+    const UPLOADS_FOLDER = 'uploads/';
     const DEFAULT_CONVERSATION_NAME = 'conversation';
     const DEFAULT_FILE_NAME = 'file';
+    const DEFAULT_PASTE_NAME = 'paste.txt';
     const BLOCK_TYPE_TEXT = 'text';
     const SENDER_HUMAN = 'human';
     const SENDER_ASSISTANT = 'assistant';
@@ -299,30 +303,35 @@
             .replace(/^-+|-+$/g, '')
             .slice(0, 80) || DEFAULT_CONVERSATION_NAME;
 
-    const usedNames = new Set();
-    const uniqueName = (name) => {
-        if(!usedNames.has(name)) {
-            usedNames.add(name);
-            return name;
-        }
-        const dot = name.lastIndexOf('.');
-        const base = dot > 0 ? name.slice(0, dot) : name;
-        const extension = dot > 0 ? name.slice(dot) : '';
-        let index = 1;
-        let candidate;
-        do {
-            candidate = `${base}-${index}${extension}`;
-            index += 1;
-        } while(usedNames.has(candidate));
-        usedNames.add(candidate);
-        return candidate;
+    const makeUniqueName = () => {
+        const usedNames = new Set();
+        return (name) => {
+            if(!usedNames.has(name)) {
+                usedNames.add(name);
+                return name;
+            }
+            const dot = name.lastIndexOf('.');
+            const base = dot > 0 ? name.slice(0, dot) : name;
+            const extension = dot > 0 ? name.slice(dot) : '';
+            let index = 1;
+            let candidate;
+            do {
+                candidate = `${base}-${index}${extension}`;
+                index += 1;
+            } while(usedNames.has(candidate));
+            usedNames.add(candidate);
+            return candidate;
+        };
     };
 
     const entries = [];
+    const uniqueZipPath = makeUniqueName();
     if(exported > 0) {
         const markdown = blocks.join('\n\n') + '\n';
+        const markdownName = `${conversationName}.md`;
         entries.push({
-            name: uniqueName(`${conversationName}.md`),
+            path: uniqueZipPath(markdownName),
+            name: markdownName,
             bytes: new TextEncoder().encode(markdown),
         });
     }
@@ -330,21 +339,28 @@
         logAlert('No conversation text to export.');
     }
 
+    const uploadedNames = new Set();
     const wiggle = `${API}/organizations/${matchedOrganizationUuid}/conversations/${conversationUuid}/wiggle`;
     try {
         const listing = await getJSON(`${wiggle}/list-files`);
         const files = listing && Array.isArray(listing.files) ? listing.files : [];
-        const generated = files.filter(
+        const exportable = files.filter(
             (filePath) =>
                 typeof filePath === 'string' &&
-                filePath.startsWith(OUTPUTS_PREFIX),
+                (filePath.startsWith(OUTPUTS_PREFIX) || filePath.startsWith(UPLOADS_PREFIX)),
         );
-        for(const filePath of generated) {
+        for(const filePath of exportable) {
+            const folder = filePath.startsWith(OUTPUTS_PREFIX) ? OUTPUTS_FOLDER : UPLOADS_FOLDER;
+            const fileName = filePath.split('/').pop() || DEFAULT_FILE_NAME;
             try {
                 entries.push({
-                    name: uniqueName(filePath.split('/').pop() || DEFAULT_FILE_NAME),
+                    path: uniqueZipPath(`${folder}${fileName}`),
+                    name: fileName,
                     bytes: await getBytes(`${wiggle}/download-file?path=${encodeURIComponent(filePath)}`),
                 });
+                if(folder === UPLOADS_FOLDER) {
+                    uploadedNames.add(fileName);
+                }
             }
             catch(error) {
                 logAlert(`Error while downloading ${filePath}.`, error);
@@ -352,7 +368,21 @@
         }
     }
     catch(error) {
-        logAlert('Generated files list unavailable (wiggle).', error);
+        logAlert('Files list unavailable (wiggle).', error);
+    }
+
+    for(const message of messages) {
+        if(!message || !Array.isArray(message.attachments)) continue;
+        for(const attachment of message.attachments) {
+            if(!attachment || typeof attachment.extracted_content !== 'string' || !attachment.extracted_content) continue;
+            const attachmentName = (typeof attachment.file_name === 'string' && attachment.file_name.trim()) || DEFAULT_PASTE_NAME;
+            if(uploadedNames.has(attachmentName)) continue;
+            entries.push({
+                path: uniqueZipPath(`${UPLOADS_FOLDER}${attachmentName}`),
+                name: attachmentName,
+                bytes: new TextEncoder().encode(attachment.extracted_content),
+            });
+        }
     }
 
     if(entries.length === 0) {
@@ -368,18 +398,25 @@
         logAlert('Content exceeds ZIP32 limits, downloading files individually.');
     }
 
-    const fileList = entries.map((entry) => entry.name).join(', ');
     let destination;
+    let fileList;
     if(BUNDLE_AS_ZIP && fitsInZip) {
-        triggerDownload(`${conversationName}.zip`, buildZip(entries));
+        const zipEntries = entries.map((entry) => ({ name: entry.path, bytes: entry.bytes }));
+        triggerDownload(`${conversationName}.zip`, buildZip(zipEntries));
         destination = `"${conversationName}.zip"`;
+        fileList = zipEntries.map((entry) => entry.name).join(', ');
     }
     else {
+        const uniqueFileName = makeUniqueName();
+        const downloadedNames = [];
         for(const entry of entries) {
-            triggerDownload(entry.name, new Blob([entry.bytes]));
+            const fileName = uniqueFileName(entry.name);
+            triggerDownload(fileName, new Blob([entry.bytes]));
+            downloadedNames.push(fileName);
             await sleep(300);
         }
         destination = 'individual files';
+        fileList = downloadedNames.join(', ');
     }
     logPrint(`${exported} message(s), ${entries.length} file(s) -> ${destination} : ${fileList}`);
 })();

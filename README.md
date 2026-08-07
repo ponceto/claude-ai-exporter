@@ -1,13 +1,14 @@
 # CLAUDE AI EXPORTER
 
-A tool that exports a Claude.ai conversation to a markdown file and downloads every file Claude generated during it. It comes in two forms sharing the exact same code: a standalone JavaScript snippet you paste into the browser console (no install, no dependencies), and a Chrome/Firefox extension that triggers the export from a toolbar button.
+A tool that exports a Claude.ai conversation to a markdown file and downloads every file exchanged during it: the files Claude generated as well as the files you provided. It comes in two forms sharing the exact same code: a standalone JavaScript snippet you paste into the browser console (no install, no dependencies), and a Chrome/Firefox extension that triggers the export from a toolbar button.
 
 ## WHAT IT DOES
 
   - Saves the full conversation as a `.md` file, named after the conversation title.
   - Collects every file Claude generated in the conversation (markdown, code, PDF, etc.), in its current version, under its original filename and with binary content preserved.
-  - By default bundles the `.md` and all generated files into a single `.zip` download. Set `BUNDLE_AS_ZIP = false` at the top of the script to download each file individually instead.
-  - Skips the model's internal reasoning and tool steps, as well as the files you uploaded yourself.
+  - Collects the files you provided to the conversation (texts, PDF, images, etc.) the same way, including the pasted texts (exported as files, named after the paste or `paste.txt`).
+  - By default bundles everything into a single `.zip` download: the `.md` at the root, the generated files under `outputs/` and the provided files under `uploads/`. Set `BUNDLE_AS_ZIP = false` at the top of the script to download each file individually instead (flat names, de-duplicated).
+  - Skips the model's internal reasoning and tool steps.
 
 The exported `.md` starts with the conversation title, then lists every message in order, alternating `## Human` and `## Assistant` headings. The markdown produced by Claude (code blocks, lists, headings) is kept as-is.
 
@@ -23,12 +24,12 @@ The script is a single async function with no dependencies and no build step; us
   1. Open the conversation you want to export at `https://claude.ai/chat/...`.
   2. Open the browser developer console (F12, *Console* tab).
   3. Copy the entire contents of [`src/claude-ai-exporter.js`](src/claude-ai-exporter.js), paste it into the console, and press Enter.
-  4. A single `.zip` named after the conversation is downloaded, containing the `.md` and every generated file. (With `BUNDLE_AS_ZIP = false`, the files download one by one and the browser may ask permission for multiple downloads.)
+  4. A single `.zip` named after the conversation is downloaded, containing the `.md` and every collected file. (With `BUNDLE_AS_ZIP = false`, the files download one by one and the browser may ask permission for multiple downloads.)
 
 A summary line is printed to the console, for example:
 
 ```
-claude-ai-exporter: 12 message(s), 3 file(s) -> "my-conversation.zip" : my-conversation.md, report.md, chart.svg
+claude-ai-exporter: 12 message(s), 4 file(s) -> "my-conversation.zip" : my-conversation.md, outputs/report.md, outputs/chart.svg, uploads/data.pdf
 ```
 
 ## USAGE AS A BROWSER EXTENSION
@@ -58,20 +59,22 @@ The script reads the conversation UUID from the page URL, finds the organization
 GET /api/organizations/{org}/chat_conversations/{conversation}?tree=True&rendering_mode=messages
 ```
 
-For the generated files, it queries the conversation's "wiggle" workspace (note the path uses `conversations`, not `chat_conversations`):
+For the generated and provided files, it queries the conversation's "wiggle" workspace (note the path uses `conversations`, not `chat_conversations`):
 
 ```
 GET /api/organizations/{org}/conversations/{conversation}/wiggle/list-files
 GET /api/organizations/{org}/conversations/{conversation}/wiggle/download-file?path=...
 ```
 
-`list-files` returns the workspace paths. The files Claude generated are the ones under `/mnt/user-data/outputs/`; each is fetched via `download-file`. All calls run same-origin with your session cookies, which is why you must be logged in.
+`list-files` returns the workspace paths. The files Claude generated are the ones under `/mnt/user-data/outputs/` and the files you provided are under `/mnt/user-data/uploads/`; each is fetched via `download-file` and lands in the matching `outputs/` or `uploads/` folder of the archive. Pasted texts are not materialized in that workspace: they are read from the conversation payload itself (`attachments[].extracted_content`) and exported under `uploads/` too, unless a workspace file with the same name was already exported (the original file wins over its extracted text). All calls run same-origin with your session cookies, which is why you must be logged in.
 
 When `BUNDLE_AS_ZIP` is enabled, the files are packaged into a `.zip` by a small built-in ZIP writer (store method, no compression). It is implemented inline so the script stays dependency-free; no external library is loaded. If the content exceeds the ZIP32 limits (65535 entries, 4 GiB per file or in total), the script falls back to downloading each file individually instead of producing a corrupt archive.
 
 ## LIMITATIONS
 
 The `.md` contains only the conversational text. The model's reasoning and its tool steps are removed.
+
+Images attached purely for viewing (never materialized in the conversation workspace) are not exported: they exist in neither the workspace listing nor the extracted attachments.
 
 ## DISCLAIMER
 
