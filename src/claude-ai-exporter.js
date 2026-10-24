@@ -25,9 +25,16 @@
     const MIME_ZIP = 'application/zip';
     const HTTP_UNAUTHORIZED = 401;
     const HTTP_FORBIDDEN = 403;
+    const HTTP_NOT_FOUND = 404;
     const REVOKE_DELAY = 1000;
+    const DOWNLOAD_DELAY = 300;
     const ZIP_MAX_ENTRIES = 0xffff;
+    const ZIP_MAX_NAME = 0xffff;
     const ZIP_MAX_SIZE = 0xffffffff;
+    const ZIP_LOCAL_HEADER_SIZE = 30;
+    const ZIP_CENTRAL_HEADER_SIZE = 46;
+    const ZIP_VERSION_MADE_BY = 0x0314;
+    const ZIP_FILE_ATTRIBUTES = 0x81a40000;
     const PLACEHOLDER = 'This block is not supported on your current device yet.';
     const OUTPUTS_PREFIX = '/mnt/user-data/outputs/';
     const UPLOADS_PREFIX = '/mnt/user-data/uploads/';
@@ -36,6 +43,9 @@
     const DEFAULT_CONVERSATION_NAME = 'conversation';
     const DEFAULT_FILE_NAME = 'file';
     const DEFAULT_PASTE_NAME = 'paste.txt';
+    const FILE_NAME_MAX_BYTES = 200;
+    const EXTENSION_MAX_LENGTH = 16;
+    const UNSAFE_CHARACTER_REPLACEMENT = '_';
     const BLOCK_TYPE_TEXT = 'text';
     const SENDER_HUMAN = 'human';
     const SENDER_ASSISTANT = 'assistant';
@@ -126,7 +136,7 @@
             const crc = zipCrc32(bytes);
             const size = bytes.length;
 
-            const local = new Uint8Array(30 + nameBytes.length);
+            const local = new Uint8Array(ZIP_LOCAL_HEADER_SIZE + nameBytes.length);
             const localView = new DataView(local.buffer);
             localView.setUint32(0, 0x04034b50, true);
             localView.setUint16(4, 20, true);
@@ -139,13 +149,13 @@
             localView.setUint32(22, size, true);
             localView.setUint16(26, nameBytes.length, true);
             localView.setUint16(28, 0, true);
-            local.set(nameBytes, 30);
+            local.set(nameBytes, ZIP_LOCAL_HEADER_SIZE);
             parts.push(local, bytes);
 
-            const central = new Uint8Array(46 + nameBytes.length);
+            const central = new Uint8Array(ZIP_CENTRAL_HEADER_SIZE + nameBytes.length);
             const centralView = new DataView(central.buffer);
             centralView.setUint32(0, 0x02014b50, true);
-            centralView.setUint16(4, 20, true);
+            centralView.setUint16(4, ZIP_VERSION_MADE_BY, true);
             centralView.setUint16(6, 20, true);
             centralView.setUint16(8, 0x0800, true);
             centralView.setUint16(10, 0, true);
@@ -159,9 +169,9 @@
             centralView.setUint16(32, 0, true);
             centralView.setUint16(34, 0, true);
             centralView.setUint16(36, 0, true);
-            centralView.setUint32(38, 0, true);
+            centralView.setUint32(38, ZIP_FILE_ATTRIBUTES, true);
             centralView.setUint32(42, offset, true);
-            central.set(nameBytes, 46);
+            central.set(nameBytes, ZIP_CENTRAL_HEADER_SIZE);
             centralRecords.push(central);
 
             offset += local.length + size;
@@ -204,33 +214,54 @@
     let data = null;
     let matchedOrganizationUuid = null;
     let lastError = null;
+    let allDenied = true;
+    let allMissing = true;
     for(const organization of organizations) {
         const organizationUuid = organization && organization.uuid;
-        if(typeof organizationUuid !== 'string') continue;
+        if(typeof organizationUuid !== 'string' || !/^[\w-]+$/.test(organizationUuid)) continue;
         try {
-            data = await getJSON(conversationPath(organizationUuid));
+            const candidate = await getJSON(conversationPath(organizationUuid));
+            if(!candidate || typeof candidate !== 'object' || !Array.isArray(candidate.chat_messages)) {
+                throw new Error(`Unexpected conversation payload in organization ${organizationUuid}`);
+            }
+            data = candidate;
             matchedOrganizationUuid = organizationUuid;
             break;
         }
         catch(error) {
             lastError = error;
+            const denied = error.status === HTTP_UNAUTHORIZED || error.status === HTTP_FORBIDDEN;
+            if(!denied) {
+                allDenied = false;
+            }
+            if(!denied && error.status !== HTTP_NOT_FOUND) {
+                allMissing = false;
+            }
         }
     }
     if(!data) {
-        const status = lastError && lastError.status;
-        if(status === HTTP_UNAUTHORIZED || status === HTTP_FORBIDDEN) {
+        if(!lastError) {
+            logError('No usable organization found on this account.');
+        }
+        else if(allDenied) {
             logError('Access to the conversation was denied. Your claude.ai session may have expired, log in again then retry.', lastError);
         }
-        else {
+        else if(allMissing) {
             logError('Conversation not found in any of your organizations.', lastError);
+        }
+        else {
+            logError('Unexpected response from claude.ai. Your session may have expired or the internal API may have changed.', lastError);
         }
         return;
     }
 
-    const allMessages = Array.isArray(data.chat_messages) ? data.chat_messages : [];
+    const allMessages = data.chat_messages;
 
     const activeBranch = (candidates, leafUuid) => {
-        if(typeof leafUuid !== 'string') return candidates;
+        if(typeof leafUuid !== 'string') {
+            logAlert('Current message unknown, exporting every branch of the conversation in raw order.');
+            return candidates;
+        }
         const byUuid = new Map();
         for(const message of candidates) {
             if(message && typeof message.uuid === 'string') {
@@ -246,7 +277,13 @@
             branch.push(message);
             currentUuid = message.parent_message_uuid;
         }
-        if(branch.length === 0) return candidates;
+        if(visited.has(currentUuid)) {
+            logAlert('Cycle detected in the message tree, the exported thread may be incomplete.');
+        }
+        if(branch.length === 0) {
+            logAlert('Current message not found, exporting every branch of the conversation in raw order.');
+            return candidates;
+        }
         branch.reverse();
         return branch;
     };
@@ -254,13 +291,47 @@
     const messages = activeBranch(allMessages, data.current_leaf_message_uuid);
 
     const stripPlaceholder = (text) => {
-        let cleaned = text
-            .split('\n')
-            .filter((line) => line.trim() !== PLACEHOLDER)
-            .join('\n');
-        cleaned = cleaned.replace(/```[^\n]*\n\s*```/g, '');
-        cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-        return cleaned.trim();
+        const output = [];
+        let fence = null;
+        for(const line of text.split('\n')) {
+            const trimmed = line.trim();
+            if(fence === null) {
+                const opening = trimmed.match(/^(`{3,})(?!.*`)|^(~{3,})/);
+                if(opening) {
+                    fence = { start: output.length, marker: opening[1] || opening[2], placeholder: false, content: false };
+                    output.push(line);
+                }
+                else if(trimmed === PLACEHOLDER) {
+                    continue;
+                }
+                else if(trimmed !== '' || output.length === 0 || output[output.length - 1].trim() !== '') {
+                    output.push(line);
+                }
+                continue;
+            }
+            if(trimmed.length >= fence.marker.length && trimmed === fence.marker[0].repeat(trimmed.length)) {
+                if(fence.placeholder && !fence.content) {
+                    output.length = fence.start;
+                    if(output.length > 0 && output[output.length - 1].trim() !== '') {
+                        output.push('');
+                    }
+                }
+                else {
+                    output.push(line);
+                }
+                fence = null;
+                continue;
+            }
+            if(trimmed === PLACEHOLDER) {
+                fence.placeholder = true;
+                continue;
+            }
+            if(trimmed !== '') {
+                fence.content = true;
+            }
+            output.push(line);
+        }
+        return output.join('\n').trim();
     };
 
     const extractText = (message) => {
@@ -282,11 +353,11 @@
             case SENDER_ASSISTANT:
                 return `${HEADING_MESSAGE}${LABEL_ASSISTANT}`;
             default:
-                return `${HEADING_MESSAGE}${sender || LABEL_UNKNOWN}`;
+                return `${HEADING_MESSAGE}${(typeof sender === 'string' && sender.replace(/\s+/g, ' ').trim()) || LABEL_UNKNOWN}`;
         }
     };
 
-    const title = (typeof data.name === 'string' && data.name.trim()) || DEFAULT_CONVERSATION_NAME;
+    const title = (typeof data.name === 'string' && data.name.replace(/\s+/g, ' ').trim()) || DEFAULT_CONVERSATION_NAME;
     const blocks = [`${HEADING_TITLE}${title}`];
     let exported = 0;
     for(const message of messages) {
@@ -298,28 +369,61 @@
     }
 
     const conversationName =
-        title
-            .replace(/[^\p{L}\p{N}]+/gu, '-')
-            .replace(/^-+|-+$/g, '')
-            .slice(0, 80) || DEFAULT_CONVERSATION_NAME;
+        Array.from(title.replace(/[^\p{L}\p{N}]+/gu, '-'))
+            .slice(0, 80)
+            .join('')
+            .replace(/^-+|-+$/g, '') || DEFAULT_CONVERSATION_NAME;
+
+    const limitBytes = (text, maxBytes) => {
+        const encoder = new TextEncoder();
+        let result = '';
+        let size = 0;
+        for(const character of text) {
+            size += encoder.encode(character).length;
+            if(size > maxBytes) break;
+            result += character;
+        }
+        return result;
+    };
+
+    const safeFileName = (path, fallback) => {
+        const cleaned = path
+            .split('/')
+            .pop()
+            .normalize('NFC')
+            .replace(/[\p{Cc}\p{Cf}\p{Cs}\\:*?"<>|\u2215\u2044\uff0f]/gu, UNSAFE_CHARACTER_REPLACEMENT);
+        const dot = cleaned.lastIndexOf('.');
+        const extension = dot > 0 && cleaned.length - dot <= EXTENSION_MAX_LENGTH ? cleaned.slice(dot) : '';
+        const base = extension ? cleaned.slice(0, dot) : cleaned;
+        const name = (limitBytes(base, FILE_NAME_MAX_BYTES - new TextEncoder().encode(extension).length) + extension)
+            .trim()
+            .replace(/[.\s]+$/u, '');
+        return /^\.*$/.test(name) ? fallback : name;
+    };
+
+    const foldName = (name) => name.toUpperCase().toLowerCase();
 
     const makeUniqueName = () => {
         const usedNames = new Set();
+        const nextIndex = new Map();
         return (name) => {
-            if(!usedNames.has(name)) {
-                usedNames.add(name);
+            if(!usedNames.has(foldName(name))) {
+                usedNames.add(foldName(name));
                 return name;
             }
+            const slash = name.lastIndexOf('/');
             const dot = name.lastIndexOf('.');
-            const base = dot > 0 ? name.slice(0, dot) : name;
-            const extension = dot > 0 ? name.slice(dot) : '';
-            let index = 1;
+            const base = dot > slash + 1 ? name.slice(0, dot) : name;
+            const extension = dot > slash + 1 ? name.slice(dot) : '';
+            const key = foldName(name);
+            let index = nextIndex.get(key) || 1;
             let candidate;
             do {
                 candidate = `${base}-${index}${extension}`;
                 index += 1;
-            } while(usedNames.has(candidate));
-            usedNames.add(candidate);
+            } while(usedNames.has(foldName(candidate)));
+            nextIndex.set(key, index);
+            usedNames.add(foldName(candidate));
             return candidate;
         };
     };
@@ -344,14 +448,16 @@
     try {
         const listing = await getJSON(`${wiggle}/list-files`);
         const files = listing && Array.isArray(listing.files) ? listing.files : [];
-        const exportable = files.filter(
+        const exportable = [...new Set(files)].filter(
             (filePath) =>
                 typeof filePath === 'string' &&
-                (filePath.startsWith(OUTPUTS_PREFIX) || filePath.startsWith(UPLOADS_PREFIX)),
+                (filePath.startsWith(OUTPUTS_PREFIX) || filePath.startsWith(UPLOADS_PREFIX)) &&
+                !filePath.endsWith('/') &&
+                !filePath.split('/').some((segment) => segment === '.' || segment === '..'),
         );
         for(const filePath of exportable) {
             const folder = filePath.startsWith(OUTPUTS_PREFIX) ? OUTPUTS_FOLDER : UPLOADS_FOLDER;
-            const fileName = filePath.split('/').pop() || DEFAULT_FILE_NAME;
+            const fileName = safeFileName(filePath, DEFAULT_FILE_NAME);
             try {
                 entries.push({
                     path: uniqueZipPath(`${folder}${fileName}`),
@@ -359,7 +465,7 @@
                     bytes: await getBytes(`${wiggle}/download-file?path=${encodeURIComponent(filePath)}`),
                 });
                 if(folder === UPLOADS_FOLDER) {
-                    uploadedNames.add(fileName);
+                    uploadedNames.add(foldName(fileName));
                 }
             }
             catch(error) {
@@ -375,8 +481,9 @@
         if(!message || !Array.isArray(message.attachments)) continue;
         for(const attachment of message.attachments) {
             if(!attachment || typeof attachment.extracted_content !== 'string' || !attachment.extracted_content) continue;
-            const attachmentName = (typeof attachment.file_name === 'string' && attachment.file_name.trim()) || DEFAULT_PASTE_NAME;
-            if(uploadedNames.has(attachmentName)) continue;
+            const namedAttachment = typeof attachment.file_name === 'string' && attachment.file_name.trim() !== '';
+            const attachmentName = namedAttachment ? safeFileName(attachment.file_name, DEFAULT_PASTE_NAME) : DEFAULT_PASTE_NAME;
+            if(namedAttachment && uploadedNames.has(foldName(attachmentName))) continue;
             entries.push({
                 path: uniqueZipPath(`${UPLOADS_FOLDER}${attachmentName}`),
                 name: attachmentName,
@@ -390,10 +497,13 @@
         return;
     }
 
+    const pathLengths = entries.map((entry) => new TextEncoder().encode(entry.path).length);
     const fitsInZip =
         entries.length <= ZIP_MAX_ENTRIES &&
+        pathLengths.every((length) => length <= ZIP_MAX_NAME) &&
         entries.every((entry) => entry.bytes.length <= ZIP_MAX_SIZE) &&
-        entries.reduce((sum, entry) => sum + entry.bytes.length, 0) <= ZIP_MAX_SIZE;
+        entries.reduce((sum, entry, index) => sum + ZIP_LOCAL_HEADER_SIZE + pathLengths[index] + entry.bytes.length, 0) < ZIP_MAX_SIZE &&
+        pathLengths.reduce((sum, length) => sum + ZIP_CENTRAL_HEADER_SIZE + length, 0) < ZIP_MAX_SIZE;
     if(BUNDLE_AS_ZIP && !fitsInZip) {
         logAlert('Content exceeds ZIP32 limits, downloading files individually.');
     }
@@ -413,7 +523,7 @@
             const fileName = uniqueFileName(entry.name);
             triggerDownload(fileName, new Blob([entry.bytes]));
             downloadedNames.push(fileName);
-            await sleep(300);
+            await sleep(DOWNLOAD_DELAY);
         }
         destination = 'individual files';
         fileList = downloadedNames.join(', ');
